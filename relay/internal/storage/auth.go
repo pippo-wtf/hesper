@@ -152,6 +152,31 @@ func (s *Bolt) Claim(ctx context.Context, id, verifier string, accessTTL, refres
 	})
 	return d, credentials, err
 }
+
+// dropCredentials deletes every access and refresh credential of a device.
+func dropCredentials(tx *bolt.Tx, id string) error {
+	for _, name := range [][]byte{tokens, refreshes} {
+		b := tx.Bucket(name)
+		var keys [][]byte
+		if err := b.ForEach(func(k, v []byte) error {
+			var row struct {
+				DeviceID string `json:"deviceId"`
+			}
+			if string(v) == id || (json.Unmarshal(v, &row) == nil && row.DeviceID == id) {
+				keys = append(keys, append([]byte(nil), k...))
+			}
+			return nil
+		}); err != nil {
+			return err
+		}
+		for _, k := range keys {
+			if err := b.Delete(k); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
 func (s *Bolt) Rotate(ctx context.Context, token, proof string, accessTTL time.Duration) (identity.Device, protocol.Credentials, error) {
 	var d identity.Device
 	var c protocol.Credentials

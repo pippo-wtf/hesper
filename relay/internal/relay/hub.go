@@ -3,6 +3,7 @@
 package relay
 
 import (
+	"context"
 	"encoding/json"
 	"sort"
 	"sync"
@@ -38,6 +39,10 @@ type Hub struct {
 	timeout     time.Duration
 	closed      bool
 	allowed     func(string) bool
+	// listDevices and revokeDevice answer "devices" and "revoke"; see
+	// SetDeviceAdmin.
+	listDevices  func(ctx context.Context, owner string) ([]identity.Device, error)
+	revokeDevice func(ctx context.Context, owner, id string) error
 }
 
 func New(devices []identity.Device, timeout time.Duration) *Hub {
@@ -81,7 +86,11 @@ func (h *Hub) Connect(device identity.Device, peer Peer) (*Connection, error) {
 	}
 	c := &Connection{device: device, peer: peer, inflight: map[string]bool{}}
 	h.connections[device.ID] = c
-	peer.Send(protocol.Message{Type: "hello", Result: protocol.JSON(map[string]string{"deviceId": device.ID, "role": string(device.Role)})})
+	hello := map[string]any{"deviceId": device.ID, "role": string(device.Role)}
+	if h.listDevices != nil {
+		hello["features"] = []string{protocol.FeatureDevices}
+	}
+	peer.Send(protocol.Message{Type: "hello", Result: protocol.JSON(hello)})
 	if device.Role == identity.Controller {
 		peer.Send(protocol.Message{Type: "machines", Machines: h.machines(device.Owner)})
 	} else {
@@ -170,14 +179,23 @@ func (h *Hub) finish(id string, result json.RawMessage, err *protocol.Error) {
 	delete(r.controller.inflight, r.clientID)
 	r.controller.peer.Send(protocol.Message{Type: "result", ID: r.clientID, Result: result, Error: err})
 }
-func (h *Hub) Handle(c *Connection, m protocol.Message) error {
-	h.mu.Lock()
-	defer h.mu.Unlock()
+func (h *Hub) current(c *Connection, m protocol.Message) error {
 	if h.connections[c.device.ID] != c || h.closed || (h.allowed != nil && !h.allowed(c.device.Owner)) {
 		return protocol.Err("disconnected", "Connection is no longer current")
 	}
 	if m.Version != protocol.Version {
 		return protocol.Err("protocol_version", "Unsupported protocol version")
+	}
+	return nil
+}
+func (h *Hub) Handle(c *Connection, m protocol.Message) error {
+	if m.Type == "devices" || m.Type == "revoke" {
+		return h.handleDevices(c, m)
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if err := h.current(c, m); err != nil {
+		return err
 	}
 	if c.device.Role == identity.Host {
 		switch m.Type {

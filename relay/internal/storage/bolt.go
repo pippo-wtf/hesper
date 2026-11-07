@@ -148,6 +148,9 @@ func (s *Bolt) Revoke(ctx context.Context, id string) error {
 			return protocol.Err("not_found", "Device not found")
 		}
 		device.Revoked = true
+		if err := dropCredentials(tx, id); err != nil {
+			return err
+		}
 		return b.Put([]byte(id), protocol.JSON(device))
 	})
 }
