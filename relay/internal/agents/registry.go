@@ -76,6 +76,9 @@ type Options struct {
 	// Sessions (optional; shared history) serves sessions.* and their
 	// notifications (sessionhook.go).
 	Sessions Sessions
+	// Devices (optional) serves devices.list and devices.remove
+	// (devicehook.go).
+	Devices Devices
 }
 
 func (o *Options) defaults() {
